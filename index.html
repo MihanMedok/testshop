@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10211f">
+<meta name="api-base" content="">
+<title>Заявка на ремонт телефона</title>
+<script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+<style>
+:root{font:16px/1.5 system-ui,sans-serif;color-scheme:dark;--bg:#10211f;--panel:#192e2a;--line:#3d5751;--text:#eff8f3;--muted:#b6c9c2;--mint:#a8f2c5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text)}
+main{width:min(100%,680px);margin:auto;padding:24px 18px 48px}
+header{display:flex;justify-content:space-between;gap:12px;align-items:center;color:var(--mint);font-weight:750}
+header a{color:var(--muted);font-size:.9rem;font-weight:500}
+a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+.hero{padding:32px 0 20px}
+h1{font-size:clamp(2.1rem,8vw,4rem);letter-spacing:-.06em;line-height:1;margin:0 0 14px}
+p{margin:0;color:var(--muted)}
+section{border:1px solid var(--line);background:var(--panel);border-radius:18px;padding:19px;margin-top:14px}
+h2{font-size:1.2rem;margin:0 0 14px}
+form{display:grid;gap:14px}
+label{display:grid;gap:5px;font-weight:600}
+input,textarea,button{font:inherit}
+input,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg);color:var(--text)}
+textarea{min-height:85px;resize:vertical}
+button{border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--text);padding:9px 13px;cursor:pointer}
+button:disabled{opacity:.62;cursor:default}
+#submit{background:var(--mint);color:#11291e;font-weight:750;border-color:var(--mint)}
+.actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.actions h2{margin:0}
+#feedback{color:var(--mint)}
+#feedback:empty{display:none}
+#records{display:grid;gap:8px}
+.record{border-top:1px solid var(--line);padding-top:9px;overflow-wrap:anywhere}
+.record strong{display:block}
+</style>
+</head>
+<body>
+<main>
+<header><span>Мастерская</span><a href="#active">Активные заявки</a></header>
+<div class="hero">
+  <h1>Ремонт телефона</h1>
+  <p>Расскажи, что случилось. Мастер возьмёт заявку в работу, и бот сообщит об этом в чате.</p>
+</div>
+<section aria-labelledby="new">
+  <h2 id="new">Новая заявка</h2>
+  <form id="lead-form">
+    <label>Имя <input name="name" autocomplete="name" maxlength="80" required></label>
+    <label>Модель телефона <input name="device" placeholder="Samsung Galaxy A55" maxlength="120" required></label>
+    <label>Что случилось <textarea name="details" placeholder="Например, разбился экран" maxlength="1000" required></textarea></label>
+    <label>Телефон для связи <input name="contact" type="tel" autocomplete="tel" maxlength="32" placeholder="+7 900 123-45-67" required></label>
+    <button id="submit" type="submit" disabled>Отправить заявку</button>
+    <p id="feedback" role="status"></p>
+  </form>
+</section>
+<section id="active" aria-labelledby="active-title">
+  <div class="actions"><h2 id="active-title">Активные заявки</h2><button id="refresh" type="button" disabled>Обновить</button></div>
+  <div id="records" role="status"><p>Заявки доступны внутри Telegram.</p></div>
+</section>
+</main>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const app = window.Telegram?.WebApp;
+  const api = document.querySelector('meta[name="api-base"]').content.trim().replace(/\/+$/, '');
+  const form = document.getElementById('lead-form');
+  const submit = document.getElementById('submit');
+  const refresh = document.getElementById('refresh');
+  const feedback = document.getElementById('feedback');
+  const records = document.getElementById('records');
+  let ticket;
+
+  if (app?.initData) {
+    app.ready();
+    app.expand();
+  }
+  if (!api || !app?.initData) {
+    const message = api ? 'Открой приложение через кнопку меню Telegram-бота.' : 'Для заявок нужно подключить адрес сервера бота.';
+    feedback.textContent = message;
+    records.textContent = message;
+    return;
+  }
+
+  async function call(action, data) {
+    const response = await fetch(api + '/api/leads/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, initData: app.initData }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Сервер не смог обработать запрос.');
+    return result;
+  }
+
+  async function loadRecords() {
+    refresh.disabled = true;
+    try {
+      const { leads } = await call('list');
+      records.replaceChildren();
+      if (!leads.length) records.textContent = 'У тебя пока нет заявок.';
+      for (const lead of leads) {
+        const row = document.createElement('div');
+        row.className = 'record';
+        const title = document.createElement('strong');
+        title.textContent = lead.device;
+        const info = document.createElement('p');
+        const date = new Date(lead.created);
+        info.textContent = '№' + lead.number + ' · ' + lead.status + ' · ' + date.toLocaleDateString('ru-RU');
+        row.append(title, info);
+        records.append(row);
+      }
+    } catch (error) {
+      records.textContent = error instanceof TypeError || error.name === 'TimeoutError'
+        ? 'Сервер недоступен. Попробуй обновить чуть позже.' : error.message;
+    } finally {
+      refresh.disabled = false;
+    }
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    const fields = Object.fromEntries(new FormData(form));
+    submit.disabled = true;
+    feedback.textContent = 'Отправляем заявку…';
+    try {
+      ticket ??= crypto.randomUUID();
+      const { number } = await call('create', { ticket, fields });
+      ticket = undefined;
+      form.reset();
+      feedback.textContent = 'Заявка №' + number + ' принята. Следи за статусом ниже.';
+      await loadRecords();
+    } catch (error) {
+      feedback.textContent = error instanceof TypeError || error.name === 'TimeoutError'
+        ? 'Связь с сервером прервалась. Нажми «Отправить заявку» ещё раз.' : error.message;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  refresh.addEventListener('click', loadRecords);
+  submit.disabled = false;
+  loadRecords();
+});
+</script>
+</body>
+</html>
